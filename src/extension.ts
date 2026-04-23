@@ -25,6 +25,8 @@ export function activate(context: vscode.ExtensionContext) {
       const info = await getFileInfo(targetUri);
       output.appendLine(`[studio] Open ${targetUri.toString()} (${info.sizeBytes} bytes)`);
 
+      const { schemaText, parseError } = await getJsonSchemaText(targetUri);
+
       const panel = vscode.window.createWebviewPanel(
         "jsonStudio.studio",
         `JSON Studio: ${info.baseName}`,
@@ -32,7 +34,7 @@ export function activate(context: vscode.ExtensionContext) {
         { enableScripts: false }
       );
 
-      panel.webview.html = renderStudioHtml(info);
+      panel.webview.html = renderStudioHtml(info, { schemaText, parseError });
     }
   );
 
@@ -97,12 +99,19 @@ function fmtDate(d?: Date): string {
   return d.toLocaleString();
 }
 
-function renderStudioHtml(info: FileInfo): string {
+type StudioJsonState = {
+  schemaText?: string;
+  parseError?: string;
+};
+
+function renderStudioHtml(info: FileInfo, jsonState: StudioJsonState): string {
   const title = escapeHtml(info.baseName);
   const fullPath = escapeHtml(info.uri.fsPath || info.uri.toString());
   const createdAt = escapeHtml(fmtDate(info.createdAt));
   const modifiedAt = escapeHtml(fmtDate(info.modifiedAt));
   const sizeBytes = escapeHtml(info.sizeBytes.toLocaleString());
+  const schemaText = escapeHtml(jsonState.schemaText ?? "");
+  const parseError = jsonState.parseError ? escapeHtml(jsonState.parseError) : "";
 
   return `<!doctype html>
 <html lang="en">
@@ -113,9 +122,12 @@ function renderStudioHtml(info: FileInfo): string {
     <style>
       body { font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif; padding: 16px; }
       h1 { font-size: 16px; margin: 0 0 12px; }
+      h2 { font-size: 13px; margin: 16px 0 8px; opacity: 0.9; }
       .card { border: 1px solid rgba(127,127,127,0.35); border-radius: 10px; padding: 12px; }
       .row { display: grid; grid-template-columns: 140px 1fr; gap: 8px; padding: 6px 0; }
       .k { opacity: 0.75; }
+      .error { color: #b00020; }
+      pre { margin: 0; white-space: pre-wrap; word-break: break-word; }
       code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
     </style>
   </head>
@@ -128,6 +140,15 @@ function renderStudioHtml(info: FileInfo): string {
       <div class="row"><div class="k">Created</div><div><code>${createdAt}</code></div></div>
       <div class="row"><div class="k">Modified</div><div><code>${modifiedAt}</code></div></div>
     </div>
+
+    <h2>Schema</h2>
+    <div class="card">
+      ${
+        parseError
+          ? `<div class="error"><code>Could not parse JSON: ${parseError}</code></div>`
+          : `<pre><code>${schemaText}</code></pre>`
+      }
+    </div>
   </body>
 </html>`;
 }
@@ -139,5 +160,81 @@ function escapeHtml(s: string): string {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
+}
+
+async function getJsonSchemaText(
+  uri: vscode.Uri
+): Promise<{ schemaText?: string; parseError?: string }> {
+  try {
+    const raw = await vscode.workspace.fs.readFile(uri);
+    const text = new TextDecoder("utf-8").decode(raw);
+    const json = JSON.parse(text) as unknown;
+    const schema = inferJsonSchema(json, 0);
+    const withMeta =
+      schema && typeof schema === "object"
+        ? { $schema: "https://json-schema.org/draft/2020-12/schema", ...schema }
+        : { $schema: "https://json-schema.org/draft/2020-12/schema" };
+    return { schemaText: JSON.stringify(withMeta, null, 2) };
+  } catch (e) {
+    return { parseError: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+type JsonSchema = Record<string, unknown>;
+
+function inferJsonSchema(value: unknown, depth: number): JsonSchema {
+  // Keep this simple and safe for arbitrarily large JSON.
+  const MAX_DEPTH = 12;
+  if (depth > MAX_DEPTH) return {};
+
+  if (value === null) return { type: "null" };
+
+  switch (typeof value) {
+    case "string":
+      return { type: "string" };
+    case "number":
+      return { type: Number.isInteger(value) ? "integer" : "number" };
+    case "boolean":
+      return { type: "boolean" };
+    case "object": {
+      if (Array.isArray(value)) {
+        const itemsSchemas = value.map((v) => inferJsonSchema(v, depth + 1));
+        const items = mergeSchemas(itemsSchemas);
+        return { type: "array", items };
+      }
+
+      const obj = value as Record<string, unknown>;
+      const properties: Record<string, JsonSchema> = {};
+      const required: string[] = [];
+
+      for (const [k, v] of Object.entries(obj)) {
+        properties[k] = inferJsonSchema(v, depth + 1);
+        required.push(k);
+      }
+
+      const schema: JsonSchema = {
+        type: "object",
+        properties
+      };
+
+      if (required.length > 0) schema.required = required;
+      return schema;
+    }
+    default:
+      return {};
+  }
+}
+
+function mergeSchemas(schemas: JsonSchema[]): JsonSchema {
+  const cleaned = schemas.filter((s) => Object.keys(s).length > 0);
+  if (cleaned.length === 0) return {};
+  if (cleaned.length === 1) return cleaned[0]!;
+
+  const uniqueJson = new Map<string, JsonSchema>();
+  for (const s of cleaned) uniqueJson.set(JSON.stringify(s), s);
+  const unique = Array.from(uniqueJson.values());
+
+  if (unique.length === 1) return unique[0]!;
+  return { anyOf: unique };
 }
 
