@@ -25,16 +25,16 @@ export function activate(context: vscode.ExtensionContext) {
       const info = await getFileInfo(targetUri);
       output.appendLine(`[studio] Open ${targetUri.toString()} (${info.sizeBytes} bytes)`);
 
-      const { schemaText, parseError } = await getJsonSchemaText(targetUri);
+      const { schemaText, jsonData, parseError } = await getJsonSchemaText(targetUri);
 
       const panel = vscode.window.createWebviewPanel(
         "jsonStudio.studio",
         `JSON Studio: ${info.baseName}`,
         { viewColumn: vscode.ViewColumn.Active, preserveFocus: false },
-        { enableScripts: false }
+        { enableScripts: true }
       );
 
-      panel.webview.html = renderStudioHtml(info, { schemaText, parseError });
+      panel.webview.html = renderStudioHtml(info, { schemaText, jsonData, parseError });
     }
   );
 
@@ -101,6 +101,7 @@ function fmtDate(d?: Date): string {
 
 type StudioJsonState = {
   schemaText?: string;
+  jsonData?: unknown;
   parseError?: string;
 };
 
@@ -110,10 +111,14 @@ function renderStudioHtml(info: FileInfo, jsonState: StudioJsonState): string {
   const createdAt = escapeHtml(fmtDate(info.createdAt));
   const modifiedAt = escapeHtml(fmtDate(info.modifiedAt));
   const sizeBytes = escapeHtml(info.sizeBytes.toLocaleString());
-  const schemaText = escapeHtml(jsonState.schemaText ?? "");
   const parseError = jsonState.parseError ? escapeHtml(jsonState.parseError) : "";
-  const schemaTableHtml =
-    !parseError && jsonState.schemaText ? renderSchemaTableFromText(jsonState.schemaText) : "";
+
+  // Prepare data for JS
+  const jsonDataStr = jsonState.jsonData ? JSON.stringify(jsonState.jsonData) : 'null';
+  const schemaStr = jsonState.schemaText ? JSON.stringify(JSON.parse(jsonState.schemaText)) : 'null';
+
+  const dataTreeHtml = jsonState.jsonData ? renderJsonTree(jsonState.jsonData, '$') : '<div class="muted">No data</div>';
+  const schemaTreeHtml = jsonState.schemaText ? renderSchemaTree(JSON.parse(jsonState.schemaText), '$') : '<div class="muted">No schema</div>';
 
   return `<!doctype html>
 <html lang="en">
@@ -122,41 +127,243 @@ function renderStudioHtml(info: FileInfo, jsonState: StudioJsonState): string {
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>${title}</title>
     <style>
-      body { font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif; padding: 16px; }
-      h1 { font-size: 16px; margin: 0 0 12px; }
-      h2 { font-size: 13px; margin: 16px 0 8px; opacity: 0.9; }
-      .card { border: 1px solid rgba(127,127,127,0.35); border-radius: 10px; padding: 12px; }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+        margin: 0;
+        padding: 0;
+        background: var(--vscode-editor-background, #ffffff);
+        color: var(--vscode-editor-foreground, #000000);
+        height: 100vh;
+        overflow: hidden;
+      }
+      .header {
+        padding: 16px;
+        border-bottom: 1px solid var(--vscode-panel-border, #cccccc);
+        background: var(--vscode-titleBar-activeBackground, #f3f3f3);
+      }
+      .header h1 {
+        margin: 0;
+        font-size: 18px;
+        font-weight: 600;
+      }
+      .tabs {
+        display: flex;
+        margin-top: 12px;
+      }
+      .tab {
+        padding: 8px 16px;
+        cursor: pointer;
+        border-radius: 4px;
+        background: transparent;
+        border: none;
+        color: var(--vscode-foreground, #000000);
+      }
+      .tab.active {
+        background: var(--vscode-tab-activeBackground, #ffffff);
+        border: 1px solid var(--vscode-tab-border, #cccccc);
+      }
+      .search {
+        margin-top: 12px;
+        display: flex;
+        gap: 8px;
+      }
+      .search input {
+        flex: 1;
+        padding: 6px 12px;
+        border: 1px solid var(--vscode-input-border, #cccccc);
+        border-radius: 4px;
+        background: var(--vscode-input-background, #ffffff);
+        color: var(--vscode-input-foreground, #000000);
+      }
+      .search button {
+        padding: 6px 12px;
+        border: 1px solid var(--vscode-button-border, #cccccc);
+        border-radius: 4px;
+        background: var(--vscode-button-background, #ffffff);
+        color: var(--vscode-button-foreground, #000000);
+        cursor: pointer;
+      }
+      .main {
+        display: flex;
+        height: calc(100vh - 120px);
+      }
+      .tree-panel {
+        flex: 1;
+        padding: 16px;
+        overflow-y: auto;
+        border-right: 1px solid var(--vscode-panel-border, #cccccc);
+      }
+      .details-panel {
+        flex: 1;
+        padding: 16px;
+        overflow-y: auto;
+        background: var(--vscode-editor-background, #ffffff);
+      }
+      .card { border: 1px solid var(--vscode-panel-border, #cccccc); border-radius: 4px; padding: 12px; margin-bottom: 16px; }
       .row { display: grid; grid-template-columns: 140px 1fr; gap: 8px; padding: 6px 0; }
       .k { opacity: 0.75; }
-      .error { color: #b00020; }
-      pre { margin: 0; white-space: pre-wrap; word-break: break-word; }
-      table { width: 100%; border-collapse: collapse; }
-      th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid rgba(127,127,127,0.25); vertical-align: top; }
-      th { position: sticky; top: 0; background: var(--vscode-editor-background, #fff); z-index: 1; }
-      .muted { opacity: 0.7; }
-      .pill { display: inline-block; font-size: 11px; padding: 2px 6px; border-radius: 999px; border: 1px solid rgba(127,127,127,0.35); }
-      code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+      .tree {
+        font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+        font-size: 13px;
+        line-height: 1.4;
+      }
+      .tree-item {
+        margin-left: 16px;
+      }
+      .tree-key {
+        color: var(--vscode-symbolIcon-methodForeground, #6c6cc4);
+        font-weight: 500;
+      }
+      .tree-value {
+        color: var(--vscode-foreground, #000000);
+      }
+      .tree-type {
+        color: var(--vscode-descriptionForeground, #6c6c80);
+        font-size: 11px;
+        margin-left: 4px;
+      }
+      .tree-toggle {
+        cursor: pointer;
+        margin-right: 4px;
+        color: var(--vscode-foreground, #000000);
+      }
+      .tree-toggle::before {
+        content: '▼';
+      }
+      .tree-collapsed .tree-toggle::before {
+        content: '▶';
+      }
+      .tree-collapsed .tree-children {
+        display: none;
+      }
+      .icon {
+        margin-right: 4px;
+        font-size: 12px;
+      }
+      .icon-string { color: #ce9178; }
+      .icon-number { color: #b5cea8; }
+      .icon-boolean { color: #569cd6; }
+      .icon-null { color: #569cd6; }
+      .icon-object { color: #dcdcaa; }
+      .icon-array { color: #c586c0; }
+      .required { font-weight: bold; }
+      .required::after { content: '*'; color: #f44747; }
+      .error {
+        color: #f44747;
+        padding: 16px;
+      }
+      .hidden { display: none; }
+      .copy-btn {
+        margin-left: 8px;
+        padding: 2px 6px;
+        font-size: 10px;
+        border: 1px solid var(--vscode-button-border, #cccccc);
+        border-radius: 3px;
+        background: var(--vscode-button-background, #ffffff);
+        color: var(--vscode-button-foreground, #000000);
+        cursor: pointer;
+      }
+      .expand-all, .collapse-all {
+        margin-left: 8px;
+        padding: 4px 8px;
+        font-size: 11px;
+        border: 1px solid var(--vscode-button-border, #cccccc);
+        border-radius: 3px;
+        background: var(--vscode-button-background, #ffffff);
+        color: var(--vscode-button-foreground, #000000);
+        cursor: pointer;
+      }
     </style>
   </head>
   <body>
-    <h1>JSON Studio</h1>
-    <div class="card">
-      <div class="row"><div class="k">File</div><div><code>${title}</code></div></div>
-      <div class="row"><div class="k">Path</div><div><code>${fullPath}</code></div></div>
-      <div class="row"><div class="k">Size</div><div><code>${sizeBytes} bytes</code></div></div>
-      <div class="row"><div class="k">Created</div><div><code>${createdAt}</code></div></div>
-      <div class="row"><div class="k">Modified</div><div><code>${modifiedAt}</code></div></div>
+    <div class="header">
+      <h1>JSON Studio: ${title}</h1>
+      <div class="tabs">
+        <button class="tab active" onclick="showTab('data')">Data Explorer</button>
+        <button class="tab" onclick="showTab('schema')">Schema</button>
+        <button class="tab" onclick="showTab('info')">Info</button>
+      </div>
+      <div class="search">
+        <input type="text" id="search" placeholder="Search..." oninput="filterTree()">
+        <button onclick="expandAll()">Expand All</button>
+        <button onclick="collapseAll()">Collapse All</button>
+      </div>
     </div>
+    <div class="main">
+      <div class="tree-panel">
+        <div id="data-tab" class="tab-content">
+          ${parseError ? `<div class="error">Could not parse JSON: ${parseError}</div>` : dataTreeHtml}
+        </div>
+        <div id="schema-tab" class="tab-content hidden">
+          ${parseError ? `<div class="error">Could not parse JSON: ${parseError}</div>` : schemaTreeHtml}
+        </div>
+        <div id="info-tab" class="tab-content hidden">
+          <div class="card">
+            <div class="row"><div class="k">File</div><div><code>${title}</code></div></div>
+            <div class="row"><div class="k">Path</div><div><code>${fullPath}</code></div></div>
+            <div class="row"><div class="k">Size</div><div><code>${sizeBytes} bytes</code></div></div>
+            <div class="row"><div class="k">Created</div><div><code>${createdAt}</code></div></div>
+            <div class="row"><div class="k">Modified</div><div><code>${modifiedAt}</code></div></div>
+          </div>
+        </div>
+      </div>
+      <div class="details-panel">
+        <div id="details">Select an item to view details</div>
+      </div>
+    </div>
+    <script>
+      const jsonData = ${jsonDataStr};
+      const schemaData = ${schemaStr};
+      let currentTab = 'data';
 
-    <h2>Schema</h2>
-    <div class="card">
-      ${
-        parseError
-          ? `<div class="error"><code>Could not parse JSON: ${parseError}</code></div>`
-          : schemaTableHtml ||
-            `<div class="muted"><code>(No schema)</code></div><pre><code>${schemaText}</code></pre>`
+      function showTab(tab) {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(c => c.classList.add('hidden'));
+        document.querySelector(\`button[onclick="showTab('\${tab}')"]\`).classList.add('active');
+        document.getElementById(\`\${tab}-tab\`).classList.remove('hidden');
+        currentTab = tab;
+        filterTree();
       }
-    </div>
+
+      function filterTree() {
+        const query = document.getElementById('search').value.toLowerCase();
+        const items = document.querySelectorAll('.tree-item');
+        items.forEach(item => {
+          const text = item.textContent.toLowerCase();
+          item.style.display = text.includes(query) ? '' : 'none';
+        });
+      }
+
+      function toggleTree(el) {
+        el.parentElement.classList.toggle('tree-collapsed');
+      }
+
+      function selectItem(path, type, value, required) {
+        const details = document.getElementById('details');
+        details.innerHTML = \`
+          <h3>Details</h3>
+          <div><strong>Path:</strong> <code>\${path}</code> <button class="copy-btn" onclick="copyToClipboard('\${path}')">Copy</button></div>
+          <div><strong>Type:</strong> \${type}</div>
+          <div><strong>Required:</strong> \${required ? 'Yes' : 'No'}</div>
+          <div><strong>Value:</strong> <pre>\${JSON.stringify(value, null, 2)}</pre></div>
+        \`;
+      }
+
+      function copyToClipboard(text) {
+        navigator.clipboard.writeText(text);
+      }
+
+      function expandAll() {
+        document.querySelectorAll('.tree-collapsed').forEach(el => el.classList.remove('tree-collapsed'));
+      }
+
+      function collapseAll() {
+        document.querySelectorAll('.tree-item:has(.tree-children)').forEach(el => el.classList.add('tree-collapsed'));
+      }
+
+      // Initialize
+      showTab('data');
+    </script>
   </body>
 </html>`;
 }
@@ -168,6 +375,126 @@ function escapeHtml(s: string): string {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
+}
+
+function renderJsonTree(value: unknown, path: string, depth = 0): string {
+  const type = getType(value);
+  const icon = getTypeIcon(type);
+  const displayValue = getDisplayValue(value, type);
+  const hasChildren = type === 'object' || type === 'array';
+
+  let html = `<div class="tree-item${depth > 0 ? ' tree-collapsed' : ''}" data-path="${escapeHtml(path)}" onclick="selectItem('${escapeHtml(path)}', '${type}', ${JSON.stringify(value)}, false)">`;
+
+  if (hasChildren) {
+    html += `<span class="tree-toggle" onclick="toggleTree(this)">▶</span>`;
+  } else {
+    html += `<span style="margin-left: 16px;"></span>`;
+  }
+
+  html += `<span class="icon ${icon}">${getTypeSymbol(type)}</span>`;
+
+  if (path !== '$') {
+    const lastPart = path.split('.').pop() || '';
+    const isArray = lastPart.includes('[');
+    const displayKey = isArray ? lastPart : `"${escapeHtml(lastPart)}"`;
+    html += `<span class="tree-key">${displayKey}: </span>`;
+  }
+
+  html += `<span class="tree-value">${displayValue}</span>`;
+  html += `<span class="tree-type">${type}</span>`;
+
+  if (hasChildren) {
+    html += `<div class="tree-children">`;
+    if (type === 'object') {
+      for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+        html += renderJsonTree(v, `${path}.${k}`, depth + 1);
+      }
+    } else if (type === 'array') {
+      (value as unknown[]).forEach((v, i) => {
+        html += renderJsonTree(v, `${path}[${i}]`, depth + 1);
+      });
+    }
+    html += `</div>`;
+  }
+
+  html += `</div>`;
+  return html;
+}
+
+function renderSchemaTree(schema: Record<string, unknown>, path: string, required = false, depth = 0): string {
+  const type = schemaTypeString(schema);
+  const icon = getTypeIcon(type);
+  const hasChildren = type === 'object' || type === 'array';
+
+  let html = `<div class="tree-item ${required ? 'required' : ''}${depth > 0 ? ' tree-collapsed' : ''}" data-path="${escapeHtml(path)}" onclick="selectItem('${escapeHtml(path)}', '${type}', ${JSON.stringify(schema)}, ${required})">`;
+
+  if (hasChildren) {
+    html += `<span class="tree-toggle" onclick="toggleTree(this)">▶</span>`;
+  } else {
+    html += `<span style="margin-left: 16px;"></span>`;
+  }
+
+  html += `<span class="icon ${icon}">${getTypeSymbol(type)}</span>`;
+
+  if (path !== '$') {
+    const lastPart = path.split('.').pop() || '';
+    const isArray = lastPart.includes('[');
+    const displayKey = isArray ? lastPart : `"${escapeHtml(lastPart)}"`;
+    html += `<span class="tree-key">${displayKey}: </span>`;
+  }
+
+  html += `<span class="tree-value">${type}</span>`;
+
+  if (hasChildren) {
+    html += `<div class="tree-children">`;
+    if (type === 'object') {
+      const props = schema.properties as Record<string, unknown> | undefined;
+      const requiredList = new Set((schema.required as string[]) || []);
+      if (props) {
+        for (const [k, v] of Object.entries(props)) {
+          html += renderSchemaTree(v as Record<string, unknown>, `${path}.${k}`, requiredList.has(k), depth + 1);
+        }
+      }
+    } else if (type === 'array') {
+      const items = schema.items as Record<string, unknown> | undefined;
+      if (items) {
+        html += renderSchemaTree(items, `${path}[]`, true, depth + 1);
+      }
+    }
+    html += `</div>`;
+  }
+
+  html += `</div>`;
+  return html;
+}
+
+function getType(value: unknown): string {
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return 'array';
+  return typeof value;
+}
+
+function getTypeIcon(type: string): string {
+  return `icon-${type}`;
+}
+
+function getTypeSymbol(type: string): string {
+  switch (type) {
+    case 'string': return '"';
+    case 'number': return '#';
+    case 'boolean': return '□';
+    case 'null': return '∅';
+    case 'object': return '{}';
+    case 'array': return '[]';
+    default: return '?';
+  }
+}
+
+function getDisplayValue(value: unknown, type: string): string {
+  if (type === 'string') return `"${escapeHtml(String(value))}"`;
+  if (type === 'null') return 'null';
+  if (type === 'object' || type === 'array') return type === 'object' ? '{' : '[';
+  return String(value);
 }
 
 type SchemaRow = {
@@ -280,7 +607,7 @@ function schemaNote(schema: Record<string, unknown>): string | undefined {
 
 async function getJsonSchemaText(
   uri: vscode.Uri
-): Promise<{ schemaText?: string; parseError?: string }> {
+): Promise<{ schemaText?: string; jsonData?: unknown; parseError?: string }> {
   try {
     const raw = await vscode.workspace.fs.readFile(uri);
     const text = new TextDecoder("utf-8").decode(raw);
@@ -290,7 +617,7 @@ async function getJsonSchemaText(
       schema && typeof schema === "object"
         ? { $schema: "https://json-schema.org/draft/2020-12/schema", ...schema }
         : { $schema: "https://json-schema.org/draft/2020-12/schema" };
-    return { schemaText: JSON.stringify(withMeta, null, 2) };
+    return { schemaText: JSON.stringify(withMeta, null, 2), jsonData: json };
   } catch (e) {
     return { parseError: e instanceof Error ? e.message : String(e) };
   }
