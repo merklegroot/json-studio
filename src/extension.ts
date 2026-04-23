@@ -112,6 +112,8 @@ function renderStudioHtml(info: FileInfo, jsonState: StudioJsonState): string {
   const sizeBytes = escapeHtml(info.sizeBytes.toLocaleString());
   const schemaText = escapeHtml(jsonState.schemaText ?? "");
   const parseError = jsonState.parseError ? escapeHtml(jsonState.parseError) : "";
+  const schemaTableHtml =
+    !parseError && jsonState.schemaText ? renderSchemaTableFromText(jsonState.schemaText) : "";
 
   return `<!doctype html>
 <html lang="en">
@@ -128,6 +130,11 @@ function renderStudioHtml(info: FileInfo, jsonState: StudioJsonState): string {
       .k { opacity: 0.75; }
       .error { color: #b00020; }
       pre { margin: 0; white-space: pre-wrap; word-break: break-word; }
+      table { width: 100%; border-collapse: collapse; }
+      th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid rgba(127,127,127,0.25); vertical-align: top; }
+      th { position: sticky; top: 0; background: var(--vscode-editor-background, #fff); z-index: 1; }
+      .muted { opacity: 0.7; }
+      .pill { display: inline-block; font-size: 11px; padding: 2px 6px; border-radius: 999px; border: 1px solid rgba(127,127,127,0.35); }
       code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
     </style>
   </head>
@@ -146,7 +153,8 @@ function renderStudioHtml(info: FileInfo, jsonState: StudioJsonState): string {
       ${
         parseError
           ? `<div class="error"><code>Could not parse JSON: ${parseError}</code></div>`
-          : `<pre><code>${schemaText}</code></pre>`
+          : schemaTableHtml ||
+            `<div class="muted"><code>(No schema)</code></div><pre><code>${schemaText}</code></pre>`
       }
     </div>
   </body>
@@ -160,6 +168,114 @@ function escapeHtml(s: string): string {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
+}
+
+type SchemaRow = {
+  path: string;
+  type: string;
+  required: boolean;
+  note?: string;
+};
+
+function renderSchemaTableFromText(schemaText: string): string {
+  try {
+    const schema = JSON.parse(schemaText) as unknown;
+    if (!schema || typeof schema !== "object") return "";
+
+    const rows = schemaToRows(schema as Record<string, unknown>);
+    if (rows.length === 0) return "";
+
+    const header = `<table>
+  <thead>
+    <tr>
+      <th>Path</th>
+      <th>Type</th>
+      <th>Required</th>
+      <th>Notes</th>
+    </tr>
+  </thead>
+  <tbody>`;
+
+    const body = rows
+      .map((r) => {
+        const req = r.required ? `<span class="pill">yes</span>` : `<span class="pill muted">no</span>`;
+        const note = r.note ? `<code>${escapeHtml(r.note)}</code>` : `<span class="muted">—</span>`;
+        return `<tr>
+  <td><code>${escapeHtml(r.path)}</code></td>
+  <td><code>${escapeHtml(r.type)}</code></td>
+  <td>${req}</td>
+  <td>${note}</td>
+</tr>`;
+      })
+      .join("");
+
+    return `${header}${body}</tbody></table>`;
+  } catch {
+    return "";
+  }
+}
+
+function schemaToRows(schema: Record<string, unknown>): SchemaRow[] {
+  const rows: SchemaRow[] = [];
+  walkSchema(schema, "$", true, rows);
+  return rows;
+}
+
+function walkSchema(
+  schema: Record<string, unknown>,
+  atPath: string,
+  required: boolean,
+  out: SchemaRow[]
+): void {
+  const type = schemaTypeString(schema);
+  const note = schemaNote(schema);
+  out.push({ path: atPath, type, required, note });
+
+  const schemaType = schema.type;
+  if (schemaType === "object") {
+    const props = schema.properties;
+    if (!props || typeof props !== "object") return;
+    const requiredList = new Set(
+      Array.isArray(schema.required) ? schema.required.filter((s) => typeof s === "string") : []
+    );
+    for (const [k, v] of Object.entries(props as Record<string, unknown>)) {
+      if (!v || typeof v !== "object") continue;
+      walkSchema(v as Record<string, unknown>, `${atPath}.${k}`, requiredList.has(k), out);
+    }
+    return;
+  }
+
+  if (schemaType === "array") {
+    const items = schema.items;
+    if (items && typeof items === "object") {
+      walkSchema(items as Record<string, unknown>, `${atPath}[]`, true, out);
+    }
+  }
+}
+
+function schemaTypeString(schema: Record<string, unknown>): string {
+  const t = schema.type;
+  if (typeof t === "string") return t;
+  const anyOf = schema.anyOf;
+  if (Array.isArray(anyOf)) {
+    const types = anyOf
+      .map((s) => (s && typeof s === "object" ? (s as Record<string, unknown>).type : undefined))
+      .filter((x): x is string => typeof x === "string");
+    if (types.length > 0) return types.join(" | ");
+    return "anyOf";
+  }
+  return "unknown";
+}
+
+function schemaNote(schema: Record<string, unknown>): string | undefined {
+  const anyOf = schema.anyOf;
+  if (Array.isArray(anyOf) && anyOf.length > 1) return `anyOf(${anyOf.length})`;
+  if (schema.type === "array") {
+    const items = schema.items;
+    if (items && typeof items === "object") return `items: ${schemaTypeString(items as Record<string, unknown>)}`;
+    return "items: unknown";
+  }
+  return undefined;
 }
 
 async function getJsonSchemaText(
