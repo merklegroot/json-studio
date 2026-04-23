@@ -202,52 +202,6 @@ function renderStudioHtml(info: FileInfo, jsonState: StudioJsonState): string {
       .card { border: 1px solid var(--vscode-panel-border, #cccccc); border-radius: 4px; padding: 12px; margin-bottom: 16px; }
       .row { display: grid; grid-template-columns: 140px 1fr; gap: 8px; padding: 6px 0; }
       .k { opacity: 0.75; }
-      .tree {
-        font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
-        font-size: 13px;
-        line-height: 1.4;
-      }
-      .tree-item {
-        margin-left: 16px;
-      }
-      .tree-key {
-        color: var(--vscode-symbolIcon-methodForeground, #6c6cc4);
-        font-weight: 500;
-      }
-      .tree-value {
-        color: var(--vscode-foreground, #000000);
-      }
-      .tree-type {
-        color: var(--vscode-descriptionForeground, #6c6c80);
-        font-size: 11px;
-        margin-left: 4px;
-      }
-      .tree-toggle {
-        cursor: pointer;
-        margin-right: 4px;
-        color: var(--vscode-foreground, #000000);
-      }
-      .tree-toggle::before {
-        content: '▼';
-      }
-      .tree-collapsed .tree-toggle::before {
-        content: '▶';
-      }
-      .tree-collapsed .tree-children {
-        display: none;
-      }
-      .icon {
-        margin-right: 4px;
-        font-size: 12px;
-      }
-      .icon-string { color: #ce9178; }
-      .icon-number { color: #b5cea8; }
-      .icon-boolean { color: #569cd6; }
-      .icon-null { color: #569cd6; }
-      .icon-object { color: #dcdcaa; }
-      .icon-array { color: #c586c0; }
-      .required { font-weight: bold; }
-      .required::after { content: '*'; color: #f44747; }
       table {
         width: 100%;
         border-collapse: collapse;
@@ -330,8 +284,6 @@ function renderStudioHtml(info: FileInfo, jsonState: StudioJsonState): string {
       </div>
       <div class="search">
         <input type="text" id="search" placeholder="Search..." oninput="filterTree()">
-        <button onclick="expandAll()">Expand All</button>
-        <button onclick="collapseAll()">Collapse All</button>
       </div>
     </div>
     <div class="main">
@@ -372,38 +324,22 @@ function renderStudioHtml(info: FileInfo, jsonState: StudioJsonState): string {
 
       function filterTree() {
         const query = document.getElementById('search').value.toLowerCase();
-        const items = document.querySelectorAll('.tree-item');
-        items.forEach(item => {
-          const text = item.textContent.toLowerCase();
-          item.style.display = text.includes(query) ? '' : 'none';
+        // For tables, filter rows
+        const rows = document.querySelectorAll('tbody tr');
+        rows.forEach(row => {
+          const text = row.textContent?.toLowerCase() || '';
+          (row as HTMLElement).style.display = text.includes(query) ? '' : 'none';
         });
       }
 
-      function toggleTree(el) {
-        el.parentElement.classList.toggle('tree-collapsed');
-      }
-
-      function selectItem(path, type, value, required) {
+      function selectItem(path: string, type: string, value: unknown, required: boolean) {
         const details = document.getElementById('details');
-        details.innerHTML = \`
-          <h3>Details</h3>
-          <div><strong>Path:</strong> <code>\${path}</code> <button class="copy-btn" onclick="copyToClipboard('\${path}')">Copy</button></div>
-          <div><strong>Type:</strong> \${type}</div>
-          <div><strong>Required:</strong> \${required ? 'Yes' : 'No'}</div>
-          <div><strong>Value:</strong> <pre>\${JSON.stringify(value, null, 2)}</pre></div>
-        \`;
-      }
-
-      function copyToClipboard(text) {
-        navigator.clipboard.writeText(text);
-      }
-
-      function expandAll() {
-        document.querySelectorAll('.tree-collapsed').forEach(el => el.classList.remove('tree-collapsed'));
-      }
-
-      function collapseAll() {
-        document.querySelectorAll('.tree-item:has(.tree-children)').forEach(el => el.classList.add('tree-collapsed'));
+        const html = '<h3>Details</h3>' +
+          '<div><strong>Path:</strong> <code>' + path + '</code></div>' +
+          '<div><strong>Type:</strong> ' + type + '</div>' +
+          '<div><strong>Required:</strong> ' + (required ? 'Yes' : 'No') + '</div>' +
+          '<div><strong>Value:</strong> <pre>' + JSON.stringify(value, null, 2) + '</pre></div>';
+        details.innerHTML = html;
       }
 
       // Initialize
@@ -420,97 +356,6 @@ function escapeHtml(s: string): string {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
-}
-
-function renderJsonTree(value: unknown, path: string, depth = 0): string {
-  const type = getType(value);
-  const icon = getTypeIcon(type);
-  const displayValue = getDisplayValue(value, type);
-  const hasChildren = type === 'object' || type === 'array';
-
-  let html = `<div class="tree-item${depth > 0 ? ' tree-collapsed' : ''}" data-path="${escapeHtml(path)}" onclick="selectItem('${escapeHtml(path)}', '${type}', ${JSON.stringify(value)}, false)">`;
-
-  if (hasChildren) {
-    html += `<span class="tree-toggle" onclick="toggleTree(this)">▶</span>`;
-  } else {
-    html += `<span style="margin-left: 16px;"></span>`;
-  }
-
-  html += `<span class="icon ${icon}">${getTypeSymbol(type)}</span>`;
-
-  if (path !== '$') {
-    const lastPart = path.split('.').pop() || '';
-    const isArray = lastPart.includes('[');
-    const displayKey = isArray ? lastPart : `"${escapeHtml(lastPart)}"`;
-    html += `<span class="tree-key">${displayKey}: </span>`;
-  }
-
-  html += `<span class="tree-value">${displayValue}</span>`;
-  html += `<span class="tree-type">${type}</span>`;
-
-  if (hasChildren) {
-    html += `<div class="tree-children">`;
-    if (type === 'object') {
-      for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-        html += renderJsonTree(v, `${path}.${k}`, depth + 1);
-      }
-    } else if (type === 'array') {
-      (value as unknown[]).forEach((v, i) => {
-        html += renderJsonTree(v, `${path}[${i}]`, depth + 1);
-      });
-    }
-    html += `</div>`;
-  }
-
-  html += `</div>`;
-  return html;
-}
-
-function renderSchemaTree(schema: Record<string, unknown>, path: string, required = false, depth = 0): string {
-  const type = schemaTypeString(schema);
-  const icon = getTypeIcon(type);
-  const hasChildren = type === 'object' || type === 'array';
-
-  let html = `<div class="tree-item ${required ? 'required' : ''}${depth > 0 ? ' tree-collapsed' : ''}" data-path="${escapeHtml(path)}" onclick="selectItem('${escapeHtml(path)}', '${type}', ${JSON.stringify(schema)}, ${required})">`;
-
-  if (hasChildren) {
-    html += `<span class="tree-toggle" onclick="toggleTree(this)">▶</span>`;
-  } else {
-    html += `<span style="margin-left: 16px;"></span>`;
-  }
-
-  html += `<span class="icon ${icon}">${getTypeSymbol(type)}</span>`;
-
-  if (path !== '$') {
-    const lastPart = path.split('.').pop() || '';
-    const isArray = lastPart.includes('[');
-    const displayKey = isArray ? lastPart : `"${escapeHtml(lastPart)}"`;
-    html += `<span class="tree-key">${displayKey}: </span>`;
-  }
-
-  html += `<span class="tree-value">${type}</span>`;
-
-  if (hasChildren) {
-    html += `<div class="tree-children">`;
-    if (type === 'object') {
-      const props = schema.properties as Record<string, unknown> | undefined;
-      const requiredList = new Set((schema.required as string[]) || []);
-      if (props) {
-        for (const [k, v] of Object.entries(props)) {
-          html += renderSchemaTree(v as Record<string, unknown>, `${path}.${k}`, requiredList.has(k), depth + 1);
-        }
-      }
-    } else if (type === 'array') {
-      const items = schema.items as Record<string, unknown> | undefined;
-      if (items) {
-        html += renderSchemaTree(items, `${path}[]`, true, depth + 1);
-      }
-    }
-    html += `</div>`;
-  }
-
-  html += `</div>`;
-  return html;
 }
 
 function getType(value: unknown): string {
