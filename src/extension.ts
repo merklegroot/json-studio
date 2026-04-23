@@ -275,6 +275,24 @@ function renderStudioHtml(info: FileInfo, jsonState: StudioJsonState): string {
         background: var(--vscode-disabledForeground, #cccccc);
         color: var(--vscode-foreground, #000000);
       }
+      .nested-table {
+        font-size: 11px;
+        margin: 4px 0;
+        border-collapse: collapse;
+      }
+      .nested-table th, .nested-table td {
+        border: 1px solid var(--vscode-panel-border, #cccccc);
+        padding: 2px 4px;
+      }
+      .nested-table th {
+        background: var(--vscode-titleBar-activeBackground, #f3f3f3);
+        font-weight: 600;
+        font-size: 10px;
+      }
+      .nested-key {
+        font-weight: 500;
+        background: var(--vscode-editor-background, #ffffff);
+      }
       .error {
         color: #f44747;
         padding: 16px;
@@ -544,8 +562,7 @@ function renderDataTable(data: unknown, rootPath: string): string {
     const body = data.map(item => {
       const row = propArray.map(p => {
         const value = (item as Record<string, unknown>)[p];
-        const str = value === undefined ? '' : JSON.stringify(value);
-        return `<td>${escapeHtml(str)}</td>`;
+        return `<td>${value === undefined ? '' : renderNestedValue(value)}</td>`;
       }).join('');
       return `<tr>${row}</tr>`;
     }).join('');
@@ -558,8 +575,7 @@ function renderDataTable(data: unknown, rootPath: string): string {
     const header = `<table><thead><tr>${properties.map(p => `<th>${escapeHtml(p)}</th>`).join('')}</tr></thead><tbody>`;
     const row = properties.map(p => {
       const value = (data as Record<string, unknown>)[p];
-      const str = JSON.stringify(value);
-      return `<td>${escapeHtml(str)}</td>`;
+      return `<td>${renderNestedValue(value)}</td>`;
     }).join('');
     return `${header}<tr>${row}</tr></tbody></table>`;
   }
@@ -604,6 +620,36 @@ function dataToRows(data: unknown, rootPath: string): DataRow[] {
   return rows;
 }
 
+function renderNestedValue(value: unknown): string {
+  if (value === null) return 'null';
+  if (typeof value === 'object') {
+    if (Array.isArray(value)) {
+      if (value.length === 0) return '[]';
+      if (value.every(item => typeof item === 'object' && item !== null)) {
+        // Array of objects - show as mini table
+        const properties = new Set<string>();
+        value.forEach(item => Object.keys(item as Record<string, unknown>).forEach(key => properties.add(key)));
+        const propArray = Array.from(properties);
+        const miniTable = `<table class="nested-table"><thead><tr>${propArray.map(p => `<th>${escapeHtml(p)}</th>`).join('')}</tr></thead><tbody>${
+          value.map(item => `<tr>${propArray.map(p => `<td>${renderNestedValue((item as Record<string, unknown>)[p])}</td>`).join('')}</tr>`).join('')
+        }</tbody></table>`;
+        return miniTable;
+      } else {
+        // Simple array
+        return `[${value.map(v => renderNestedValue(v)).join(', ')}]`;
+      }
+    } else {
+      // Object - show as mini table
+      const properties = Object.keys(value as Record<string, unknown>);
+      const miniTable = `<table class="nested-table"><tbody>${
+        properties.map(p => `<tr><td class="nested-key">${escapeHtml(p)}:</td><td>${renderNestedValue((value as Record<string, unknown>)[p])}</td></tr>`).join('')
+      }</tbody></table>`;
+      return miniTable;
+    }
+  }
+  return escapeHtml(JSON.stringify(value));
+}
+
 function walkData(data: unknown, atPath: string, out: DataRow[]): void {
   const type = getType(data);
   const value = JSON.stringify(data);
@@ -625,6 +671,37 @@ function renderSchemaTableFromText(schemaText: string): string {
     const schema = JSON.parse(schemaText) as Record<string, unknown>;
     if (!schema || typeof schema !== "object") return "";
 
+    // For object schemas, create hierarchical table
+    if (schema.type === "object" && typeof schema.properties === "object" && schema.properties !== null) {
+      const topLevelProps = Object.keys(schema.properties as Record<string, unknown>);
+      const tableRows: string[] = [];
+
+      // First row: top-level properties
+      tableRows.push(`<tr>${topLevelProps.map(p => `<th>${escapeHtml(p)}</th>`).join('')}</tr>`);
+
+      // Find nested properties grouped by parent
+      const nestedGroups: Record<string, string[]> = {};
+      topLevelProps.forEach(prop => {
+        const propSchema = (schema.properties as Record<string, unknown>)[prop] as Record<string, unknown>;
+        if (propSchema && typeof propSchema === 'object' && propSchema.type === 'object' && propSchema.properties) {
+          const nestedProps = Object.keys(propSchema.properties as Record<string, unknown>);
+          if (nestedProps.length > 0) {
+            nestedGroups[prop] = nestedProps;
+          }
+        }
+      });
+
+      // Add rows for nested groups
+      Object.entries(nestedGroups).forEach(([parentProp, nestedProps]) => {
+        const parentIndex = topLevelProps.indexOf(parentProp);
+        const prefixCells = Array.from({length: parentIndex}, () => '<td>—</td>').join('');
+        const nestedCells = nestedProps.map(p => `<td>${escapeHtml(p)}</td>`).join('');
+        tableRows.push(`<tr>${prefixCells}${nestedCells}</tr>`);
+      });
+
+      return `<table><thead>${tableRows[0]}</thead><tbody>${tableRows.slice(1).join('')}</tbody></table>`;
+    }
+
     // Special case: if it's an array of objects, show the property names as table headers
     if (schema.type === "array" && typeof schema.items === "object" && schema.items !== null) {
       const items = schema.items as Record<string, unknown>;
@@ -633,13 +710,6 @@ function renderSchemaTableFromText(schemaText: string): string {
         const headerCells = properties.map(p => `<th>${escapeHtml(p)}</th>`).join('');
         return `<table><thead><tr>${headerCells}</tr></thead><tbody></tbody></table>`;
       }
-    }
-
-    // Special case: if it's a single object, show the property names as table headers
-    if (schema.type === "object" && typeof schema.properties === "object" && schema.properties !== null) {
-      const properties = Object.keys(schema.properties as Record<string, unknown>);
-      const headerCells = properties.map(p => `<th>${escapeHtml(p)}</th>`).join('');
-      return `<table><thead><tr>${headerCells}</tr></thead><tbody></tbody></table>`;
     }
 
     // Fallback to detailed table
