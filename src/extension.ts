@@ -279,8 +279,8 @@ function renderStudioHtml(info: FileInfo, jsonState: StudioJsonState): string {
     <div class="header">
       <h1>JSON Studio: ${title}</h1>
       <div class="tabs">
-        <button class="tab active" onclick="showTab('data')">Data Explorer</button>
-        <button class="tab" onclick="showTab('schema')">Schema</button>
+        <button class="tab active" onclick="showTab('schema')">Schema</button>
+        <button class="tab" onclick="showTab('data')">Data Explorer</button>
         <button class="tab" onclick="showTab('info')">Info</button>
       </div>
       <div class="search">
@@ -291,11 +291,11 @@ function renderStudioHtml(info: FileInfo, jsonState: StudioJsonState): string {
     </div>
     <div class="main">
       <div class="tree-panel">
-        <div id="data-tab" class="tab-content">
-          ${parseError ? `<div class="error">Could not parse JSON: ${parseError}</div>` : dataTreeHtml}
-        </div>
-        <div id="schema-tab" class="tab-content hidden">
+        <div id="schema-tab" class="tab-content">
           ${parseError ? `<div class="error">Could not parse JSON: ${parseError}</div>` : schemaTreeHtml}
+        </div>
+        <div id="data-tab" class="tab-content hidden">
+          ${parseError ? `<div class="error">Could not parse JSON: ${parseError}</div>` : dataTreeHtml}
         </div>
         <div id="info-tab" class="tab-content hidden">
           <div class="card">
@@ -314,7 +314,7 @@ function renderStudioHtml(info: FileInfo, jsonState: StudioJsonState): string {
     <script>
       const jsonData = ${jsonDataStr};
       const schemaData = ${schemaStr};
-      let currentTab = 'data';
+      let currentTab = 'schema';
 
       function showTab(tab) {
         document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -362,7 +362,7 @@ function renderStudioHtml(info: FileInfo, jsonState: StudioJsonState): string {
       }
 
       // Initialize
-      showTab('data');
+      showTab('schema');
     </script>
   </body>
 </html>`;
