@@ -117,8 +117,8 @@ function renderStudioHtml(info: FileInfo, jsonState: StudioJsonState): string {
   const jsonDataStr = jsonState.jsonData ? JSON.stringify(jsonState.jsonData) : 'null';
   const schemaStr = jsonState.schemaText ? JSON.stringify(JSON.parse(jsonState.schemaText)) : 'null';
 
-  const dataTreeHtml = jsonState.jsonData ? renderJsonTree(jsonState.jsonData, '$') : '<div class="muted">No data</div>';
-  const schemaTreeHtml = jsonState.schemaText ? renderSchemaTree(JSON.parse(jsonState.schemaText), '$') : '<div class="muted">No schema</div>';
+  const dataTreeHtml = jsonState.jsonData ? renderDataTable(jsonState.jsonData, '$') : '<div class="muted">No data</div>';
+  const schemaTreeHtml = jsonState.schemaText ? renderSchemaTableFromText(jsonState.schemaText) : '<div class="muted">No schema</div>';
 
   return `<!doctype html>
 <html lang="en">
@@ -248,6 +248,33 @@ function renderStudioHtml(info: FileInfo, jsonState: StudioJsonState): string {
       .icon-array { color: #c586c0; }
       .required { font-weight: bold; }
       .required::after { content: '*'; color: #f44747; }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+      }
+      th, td {
+        border: 1px solid var(--vscode-panel-border, #cccccc);
+        padding: 8px;
+        text-align: left;
+      }
+      th {
+        background: var(--vscode-titleBar-activeBackground, #f3f3f3);
+        font-weight: 600;
+      }
+      .pill {
+        display: inline-block;
+        padding: 2px 6px;
+        border-radius: 12px;
+        font-size: 11px;
+        font-weight: 500;
+        background: var(--vscode-charts-green, #4caf50);
+        color: white;
+      }
+      .pill.muted {
+        background: var(--vscode-disabledForeground, #cccccc);
+        color: var(--vscode-foreground, #000000);
+      }
       .error {
         color: #f44747;
         padding: 16px;
@@ -504,12 +531,119 @@ type SchemaRow = {
   note?: string;
 };
 
+function renderDataTable(data: unknown, rootPath: string): string {
+  // Special case: if data is an array of objects, show as table
+  if (Array.isArray(data) && data.length > 0 && data.every(item => typeof item === 'object' && item !== null)) {
+    const properties = new Set<string>();
+    data.forEach(item => {
+      Object.keys(item as Record<string, unknown>).forEach(key => properties.add(key));
+    });
+    const propArray = Array.from(properties);
+
+    const header = `<table><thead><tr>${propArray.map(p => `<th>${escapeHtml(p)}</th>`).join('')}</tr></thead><tbody>`;
+    const body = data.map(item => {
+      const row = propArray.map(p => {
+        const value = (item as Record<string, unknown>)[p];
+        const str = value === undefined ? '' : JSON.stringify(value);
+        return `<td>${escapeHtml(str)}</td>`;
+      }).join('');
+      return `<tr>${row}</tr>`;
+    }).join('');
+    return `${header}${body}</tbody></table>`;
+  }
+
+  // Special case: if data is a single object, show as single-row table
+  if (data !== null && typeof data === 'object' && !Array.isArray(data)) {
+    const properties = Object.keys(data as Record<string, unknown>);
+    const header = `<table><thead><tr>${properties.map(p => `<th>${escapeHtml(p)}</th>`).join('')}</tr></thead><tbody>`;
+    const row = properties.map(p => {
+      const value = (data as Record<string, unknown>)[p];
+      const str = JSON.stringify(value);
+      return `<td>${escapeHtml(str)}</td>`;
+    }).join('');
+    return `${header}<tr>${row}</tr></tbody></table>`;
+  }
+
+  // Fallback: flatten structure
+  const rows = dataToRows(data, rootPath);
+  if (rows.length === 0) return "";
+
+  const header = `<table>
+  <thead>
+    <tr>
+      <th>Path</th>
+      <th>Type</th>
+      <th>Value</th>
+    </tr>
+  </thead>
+  <tbody>`;
+
+  const body = rows
+    .map((r) => {
+      const value = r.value.length > 100 ? `${r.value.substring(0, 100)}...` : r.value;
+      return `<tr>
+  <td><code>${escapeHtml(r.path)}</code></td>
+  <td><code>${escapeHtml(r.type)}</code></td>
+  <td><code>${escapeHtml(value)}</code></td>
+</tr>`;
+    })
+    .join("");
+
+  return `${header}${body}</tbody></table>`;
+}
+
+type DataRow = {
+  path: string;
+  type: string;
+  value: string;
+};
+
+function dataToRows(data: unknown, rootPath: string): DataRow[] {
+  const rows: DataRow[] = [];
+  walkData(data, rootPath, rows);
+  return rows;
+}
+
+function walkData(data: unknown, atPath: string, out: DataRow[]): void {
+  const type = getType(data);
+  const value = JSON.stringify(data);
+  out.push({ path: atPath, type, value });
+
+  if (type === 'object' && data && typeof data === 'object') {
+    for (const [k, v] of Object.entries(data as Record<string, unknown>)) {
+      walkData(v, `${atPath}.${k}`, out);
+    }
+  } else if (type === 'array' && Array.isArray(data)) {
+    data.forEach((v, i) => {
+      walkData(v, `${atPath}[${i}]`, out);
+    });
+  }
+}
+
 function renderSchemaTableFromText(schemaText: string): string {
   try {
-    const schema = JSON.parse(schemaText) as unknown;
+    const schema = JSON.parse(schemaText) as Record<string, unknown>;
     if (!schema || typeof schema !== "object") return "";
 
-    const rows = schemaToRows(schema as Record<string, unknown>);
+    // Special case: if it's an array of objects, show the property names as table headers
+    if (schema.type === "array" && typeof schema.items === "object" && schema.items !== null) {
+      const items = schema.items as Record<string, unknown>;
+      if (items.type === "object" && typeof items.properties === "object" && items.properties !== null) {
+        const properties = Object.keys(items.properties as Record<string, unknown>);
+        const headerCells = properties.map(p => `<th>${escapeHtml(p)}</th>`).join('');
+        return `<table><thead><tr>${headerCells}</tr></thead><tbody></tbody></table>`;
+      }
+    }
+
+    // Special case: if it's a single object, show the property names as table headers
+    if (schema.type === "object" && typeof schema.properties === "object" && schema.properties !== null) {
+      const properties = Object.keys(schema.properties as Record<string, unknown>);
+      const headerCells = properties.map(p => `<th>${escapeHtml(p)}</th>`).join('');
+      return `<table><thead><tr>${headerCells}</tr></thead><tbody></tbody></table>`;
+    }
+
+    // Fallback to detailed table
+    const rows = schemaToRows(schema);
     if (rows.length === 0) return "";
 
     const header = `<table>
