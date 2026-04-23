@@ -395,19 +395,15 @@ type SchemaRow = {
 };
 
 function renderDataTable(data: unknown, rootPath: string): string {
-  // Special case: if data is an array of objects, show as table
+  // Special case: if data is an array of objects, show as flat table
   if (Array.isArray(data) && data.length > 0 && data.every(item => typeof item === 'object' && item !== null)) {
-    const properties = new Set<string>();
-    data.forEach(item => {
-      Object.keys(item as Record<string, unknown>).forEach(key => properties.add(key));
-    });
-    const propArray = Array.from(properties);
-
-    const header = `<table><thead><tr>${propArray.map(p => `<th>${escapeHtml(p)}</th>`).join('')}</tr></thead><tbody>`;
+    const paths = getFlattenedPaths(data[0]);
+    const header = `<table><thead><tr>${paths.map(p => `<th>${escapeHtml(p)}</th>`).join('')}</tr></thead><tbody>`;
     const body = data.map(item => {
-      const row = propArray.map(p => {
-        const value = (item as Record<string, unknown>)[p];
-        return `<td>${value === undefined ? '' : renderNestedValue(value)}</td>`;
+      const row = paths.map(path => {
+        const value = getValueAtPath(item, path);
+        const str = value === undefined ? '' : JSON.stringify(value);
+        return `<td>${escapeHtml(str)}</td>`;
       }).join('');
       return `<tr>${row}</tr>`;
     }).join('');
@@ -416,11 +412,12 @@ function renderDataTable(data: unknown, rootPath: string): string {
 
   // Special case: if data is a single object, show as single-row table
   if (data !== null && typeof data === 'object' && !Array.isArray(data)) {
-    const properties = Object.keys(data as Record<string, unknown>);
-    const header = `<table><thead><tr>${properties.map(p => `<th>${escapeHtml(p)}</th>`).join('')}</tr></thead><tbody>`;
-    const row = properties.map(p => {
-      const value = (data as Record<string, unknown>)[p];
-      return `<td>${renderNestedValue(value)}</td>`;
+    const paths = getFlattenedPaths(data);
+    const header = `<table><thead><tr>${paths.map(p => `<th>${escapeHtml(p)}</th>`).join('')}</tr></thead><tbody>`;
+    const row = paths.map(path => {
+      const value = getValueAtPath(data, path);
+      const str = JSON.stringify(value);
+      return `<td>${escapeHtml(str)}</td>`;
     }).join('');
     return `${header}<tr>${row}</tr></tbody></table>`;
   }
@@ -495,6 +492,45 @@ function renderNestedValue(value: unknown): string {
   return escapeHtml(JSON.stringify(value));
 }
 
+function getFlattenedPaths(data: unknown, prefix = ''): string[] {
+  const paths: string[] = [];
+  if (data === null || typeof data !== 'object') {
+    return [prefix || '$'];
+  }
+  if (Array.isArray(data)) {
+    if (data.length > 0 && typeof data[0] === 'object' && data[0] !== null) {
+      // For arrays of objects, get paths from first item
+      return getFlattenedPaths(data[0], prefix);
+    }
+    return [prefix || '$'];
+  }
+  const obj = data as Record<string, unknown>;
+  for (const [key, value] of Object.entries(obj)) {
+    const newPrefix = prefix ? `${prefix}.${key}` : key;
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+      paths.push(newPrefix);
+    } else {
+      paths.push(...getFlattenedPaths(value, newPrefix));
+    }
+  }
+  return paths;
+}
+
+function getValueAtPath(data: unknown, path: string): unknown {
+  const parts = path.split('.');
+  let current = data;
+  for (const part of parts) {
+    if (current === null || typeof current !== 'object') return undefined;
+    if (Array.isArray(current)) {
+      // For arrays, we take the first item
+      current = current[0];
+      if (current === undefined) return undefined;
+    }
+    current = (current as Record<string, unknown>)[part];
+  }
+  return current;
+}
+
 function walkData(data: unknown, atPath: string, out: DataRow[]): void {
   const type = getType(data);
   const value = JSON.stringify(data);
@@ -516,43 +552,70 @@ function renderSchemaTableFromText(schemaText: string): string {
     const schema = JSON.parse(schemaText) as Record<string, unknown>;
     if (!schema || typeof schema !== "object") return "";
 
-    // For object schemas, create hierarchical table
+    // For object schemas, create table with colspan for nested properties
     if (schema.type === "object" && typeof schema.properties === "object" && schema.properties !== null) {
-      const topLevelProps = Object.keys(schema.properties as Record<string, unknown>);
-      const tableRows: string[] = [];
-
-      // First row: top-level properties
-      tableRows.push(`<tr>${topLevelProps.map(p => `<th>${escapeHtml(p)}</th>`).join('')}</tr>`);
-
-      // Find nested properties grouped by parent
-      const nestedGroups: Record<string, string[]> = {};
+      const props = schema.properties as Record<string, unknown>;
+      const topLevelProps = Object.keys(props);
+      
+      // Build header rows
+      const headerRows: string[] = [];
+      const dataColumns: string[] = [];
+      
+      // First header row
+      let firstRow = '';
       topLevelProps.forEach(prop => {
-        const propSchema = (schema.properties as Record<string, unknown>)[prop] as Record<string, unknown>;
+        const propSchema = props[prop] as Record<string, unknown>;
         if (propSchema && typeof propSchema === 'object' && propSchema.type === 'object' && propSchema.properties) {
           const nestedProps = Object.keys(propSchema.properties as Record<string, unknown>);
-          if (nestedProps.length > 0) {
-            nestedGroups[prop] = nestedProps;
+          if (nestedProps.length > 1) {
+            firstRow += `<th colspan="${nestedProps.length}">${escapeHtml(prop)}</th>`;
+            dataColumns.push(...nestedProps.map(np => `${prop}.${np}`));
+          } else if (nestedProps.length === 1) {
+            firstRow += `<th>${escapeHtml(prop)}</th>`;
+            dataColumns.push(`${prop}.${nestedProps[0]}`);
+          } else {
+            firstRow += `<th>${escapeHtml(prop)}</th>`;
+            dataColumns.push(prop);
           }
+        } else {
+          firstRow += `<th>${escapeHtml(prop)}</th>`;
+          dataColumns.push(prop);
         }
       });
-
-      // Add rows for nested groups
-      Object.entries(nestedGroups).forEach(([parentProp, nestedProps]) => {
-        const parentIndex = topLevelProps.indexOf(parentProp);
-        const prefixCells = Array.from({length: parentIndex}, () => '<td>—</td>').join('');
-        const nestedCells = nestedProps.map(p => `<td>${escapeHtml(p)}</td>`).join('');
-        tableRows.push(`<tr>${prefixCells}${nestedCells}</tr>`);
+      headerRows.push(`<tr>${firstRow}</tr>`);
+      
+      // Second header row for nested properties
+      let secondRow = '';
+      topLevelProps.forEach(prop => {
+        const propSchema = props[prop] as Record<string, unknown>;
+        if (propSchema && typeof propSchema === 'object' && propSchema.type === 'object' && propSchema.properties) {
+          const nestedProps = Object.keys(propSchema.properties as Record<string, unknown>);
+          if (nestedProps.length > 1) {
+            nestedProps.forEach(np => {
+              secondRow += `<th>${escapeHtml(np)}</th>`;
+            });
+          } else if (nestedProps.length === 1) {
+            // Already handled in first row
+          } else {
+            secondRow += `<th>—</th>`;
+          }
+        } else {
+          secondRow += `<th>—</th>`;
+        }
       });
-
-      return `<table><thead>${tableRows[0]}</thead><tbody>${tableRows.slice(1).join('')}</tbody></table>`;
+      if (secondRow.includes('<th>')) {
+        headerRows.push(`<tr>${secondRow}</tr>`);
+      }
+      
+      return `<table><thead>${headerRows.join('')}</thead><tbody></tbody></table>`;
     }
 
-    // Special case: if it's an array of objects, show the property names as table headers
+    // Special case: if it's an array of objects, show the flattened property names
     if (schema.type === "array" && typeof schema.items === "object" && schema.items !== null) {
       const items = schema.items as Record<string, unknown>;
       if (items.type === "object" && typeof items.properties === "object" && items.properties !== null) {
-        const properties = Object.keys(items.properties as Record<string, unknown>);
-        const headerCells = properties.map(p => `<th>${escapeHtml(p)}</th>`).join('');
+        const paths = getSchemaPaths(items);
+        const headerCells = paths.map(p => `<th>${escapeHtml(p)}</th>`).join('');
         return `<table><thead><tr>${headerCells}</tr></thead><tbody></tbody></table>`;
       }
     }
@@ -589,6 +652,25 @@ function renderSchemaTableFromText(schemaText: string): string {
   } catch {
     return "";
   }
+}
+
+function getSchemaPaths(schema: Record<string, unknown>, prefix = ''): string[] {
+  const paths: string[] = [];
+  if (schema.type === 'object' && schema.properties) {
+    const props = schema.properties as Record<string, unknown>;
+    for (const [key, value] of Object.entries(props)) {
+      const newPrefix = prefix ? `${prefix}.${key}` : key;
+      if (value && typeof value === 'object') {
+        const subSchema = value as Record<string, unknown>;
+        if (subSchema.type === 'object' && subSchema.properties) {
+          paths.push(...getSchemaPaths(subSchema, newPrefix));
+        } else {
+          paths.push(newPrefix);
+        }
+      }
+    }
+  }
+  return paths;
 }
 
 function schemaToRows(schema: Record<string, unknown>): SchemaRow[] {
