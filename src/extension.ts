@@ -117,7 +117,6 @@ function renderStudioHtml(info: FileInfo, jsonState: StudioJsonState): string {
   const jsonDataStr = jsonState.jsonData ? JSON.stringify(jsonState.jsonData) : 'null';
   const schemaStr = jsonState.schemaText ? JSON.stringify(JSON.parse(jsonState.schemaText)) : 'null';
 
-  const dataTreeHtml = jsonState.jsonData ? renderDataTable(jsonState.jsonData, '$') : '<div class="muted">No data</div>';
   const schemaTreeHtml = jsonState.schemaText ? renderSchemaTableFromText(jsonState.schemaText) : '<div class="muted">No schema</div>';
 
   return `<!doctype html>
@@ -278,9 +277,8 @@ function renderStudioHtml(info: FileInfo, jsonState: StudioJsonState): string {
     <div class="header">
       <h1>JSON Studio: ${title}</h1>
       <div class="tabs">
-        <button class="tab active" onclick="showTab('schema')">Schema</button>
-        <button class="tab" onclick="showTab('data')">Data Explorer</button>
-        <button class="tab" onclick="showTab('info')">Info</button>
+        <button class="tab active" data-tab="schema" onclick="showTab('schema')">Schema</button>
+        <button class="tab" data-tab="info" onclick="showTab('info')">Info</button>
       </div>
       <div class="search">
         <input type="text" id="search" placeholder="Search..." oninput="filterTree()">
@@ -290,9 +288,6 @@ function renderStudioHtml(info: FileInfo, jsonState: StudioJsonState): string {
       <div class="tree-panel">
         <div id="schema-tab" class="tab-content">
           ${parseError ? `<div class="error">Could not parse JSON: ${parseError}</div>` : schemaTreeHtml}
-        </div>
-        <div id="data-tab" class="tab-content hidden">
-          ${parseError ? `<div class="error">Could not parse JSON: ${parseError}</div>` : dataTreeHtml}
         </div>
         <div id="info-tab" class="tab-content hidden">
           <div class="card">
@@ -316,8 +311,8 @@ function renderStudioHtml(info: FileInfo, jsonState: StudioJsonState): string {
       function showTab(tab) {
         document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
         document.querySelectorAll('.tab-content').forEach(c => c.classList.add('hidden'));
-        document.querySelector(\`button[onclick="showTab('\${tab}')"]\`).classList.add('active');
-        document.getElementById(\`\${tab}-tab\`).classList.remove('hidden');
+        document.querySelector('button[data-tab="' + tab + '"]').classList.add('active');
+        document.getElementById(tab + '-tab').classList.remove('hidden');
         currentTab = tab;
         filterTree();
       }
@@ -326,10 +321,12 @@ function renderStudioHtml(info: FileInfo, jsonState: StudioJsonState): string {
         const query = document.getElementById('search').value.toLowerCase();
         // For tables, filter rows
         const rows = document.querySelectorAll('tbody tr');
-        rows.forEach(row => {
-          const text = row.textContent?.toLowerCase() || '';
-          (row as HTMLElement).style.display = text.includes(query) ? '' : 'none';
-        });
+        if (rows.length > 0) {
+          rows.forEach(row => {
+            const text = row.textContent?.toLowerCase() || '';
+            (row as HTMLElement).style.display = text.includes(query) ? '' : 'none';
+          });
+        }
       }
 
       function selectItem(path: string, type: string, value: unknown, required: boolean) {
