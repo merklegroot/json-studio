@@ -1,0 +1,38 @@
+{
+  "name": "json-studio",
+  "displayName": "JSON Studio",
+  "description": "A VS Code / Cursor extension to make it easier to work with JSON files.",
+  "version": "0.0.1",
+  "publisher": "local",
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:jsonStudio.helloWorld"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "jsonStudio.helloWorld",
+        "title": "JSON Studio: Hello World"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -p .",
+    "watch": "tsc -p . -w",
+    "package": "npm run compile",
+    "pretest": "npm run compile"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.7.2"
+  }
+}
+
