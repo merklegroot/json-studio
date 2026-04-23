@@ -12,7 +12,8 @@
     "Other"
   ],
   "activationEvents": [
-    "onCommand:jsonStudio.helloWorld"
+    "onCommand:jsonStudio.helloWorld",
+    "onCommand:jsonStudio.openInStudio"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -20,8 +21,28 @@
       {
         "command": "jsonStudio.helloWorld",
         "title": "JSON Studio: Hello World"
+      },
+      {
+        "command": "jsonStudio.openInStudio",
+        "title": "JSON Studio: Open in Studio"
       }
-    ]
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "jsonStudio.openInStudio",
+          "when": "resourceExtname == .json",
+          "group": "navigation@10"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "jsonStudio.openInStudio",
+          "when": "resourceExtname == .json",
+          "group": "navigation@10"
+        }
+      ]
+    }
   },
   "scripts": {
     "compile": "tsc -p .",
