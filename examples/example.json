@@ -1,0 +1,9 @@
+{
+  "hello": "world",
+  "numbers": [1, 2, 3],
+  "nested": {
+    "enabled": true,
+    "note": "Opened automatically when launching the extension host."
+  }
+}
+
